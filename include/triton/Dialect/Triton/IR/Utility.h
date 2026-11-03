@@ -3,6 +3,7 @@
 
 #include "mlir/Dialect/LLVMIR/LLVMDialect.h"
 #include "mlir/IR/BuiltinTypes.h"
+#include "mlir/IR/Matchers.h"
 #include "triton/Dialect/Triton/IR/Dialect.h"
 #include <algorithm>
 #include <numeric>
@@ -191,6 +192,14 @@ template <typename T> auto seq(T start, T end, T step) {
 // Combine the current mask with the given predicate.
 Value getPredMask(RewriterBase &rewriter, Type typeLike, Value currentMask,
                   Value pred);
+
+// Fold an all-true mask in place on a single-result operation.
+template <typename OpT> OpFoldResult foldRedundantMask(OpT op, Attribute mask) {
+  if (!mask || !matchPattern(mask, m_One()))
+    return {};
+  op.getMaskMutable().clear();
+  return op->getResult(0);
+}
 
 // Get the value of the induction variable at the end of the loop.
 Value getLastInductionValue(OpBuilder &b, scf::ForOp loop);

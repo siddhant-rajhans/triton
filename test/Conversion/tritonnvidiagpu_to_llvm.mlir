@@ -1,12 +1,14 @@
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' --initialize-ws-cluster-barriers=compute-capability=90 -reconcile-unrealized-casts | FileCheck %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=85' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=85' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=85' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX85 %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90 ptx-version=86' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=90 ptx-version=86' -reconcile-unrealized-casts | FileCheck --check-prefix=PTX86 %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=107 ptx-version=94' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=107 ptx-version=94' --initialize-ws-cluster-barriers='compute-capability=107 ptx-version=94' -reconcile-unrealized-casts | FileCheck --check-prefix=RUBIN %s
-// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm=compute-capability=90 --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
+// RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=90' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=81' --initialize-ws-cluster-barriers=compute-capability=90 --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CLUSTER-MASK %s
 // RUN: triton-opt %s -split-input-file --triton-nvidia-gpu-membar='compute-capability=100 ptx-version=86' --triton-nvidia-gpu-tmem-barrier-insertion --triton-nvidia-gpu-optimize-mbarrier-arrivals --triton-nvidia-gpu-cluster-barrier-mbar-allocator --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' --initialize-ws-cluster-barriers='compute-capability=100 ptx-version=86' --canonicalize-llvm-ir -reconcile-unrealized-casts | FileCheck --check-prefix=CANONICALIZE-SM100 %s
 // RUN: triton-opt %s -split-input-file --allocate-shared-memory-nv=compute-capability=90 --test-print-buffer-region -verify-diagnostics=only-expected -o /dev/null
 // RUN: split-file %s %t
-// RUN: triton-opt %t/async-shared-store.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=ASYNC-STORE-PTX
+// RUN: not triton-opt %t/async-shared-store.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=80' 2>&1 | FileCheck %s --check-prefix=ASYNC-STORE-PTX80
+// RUN: triton-opt %t/async-shared-store.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefixes=ASYNC-STORE-PTX,ASYNC-STORE-PTX83
+// RUN: triton-opt %t/async-shared-store.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=92' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx92 | FileCheck %s --check-prefixes=ASYNC-STORE-PTX,ASYNC-STORE-PTX92
 
 #shared0 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0]}>
 #smem = #ttg.shared_memory
@@ -1255,9 +1257,18 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32, "ttg.thr
 // -----
 
 //--- async-shared-store.mlir
+// ASYNC-STORE-PTX80: requires PTX 8.1 or newer
 
 #scalar = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
 #vector = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#vector8 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#padded1 = #ttg.padded_shared<[32:+1] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
+#padded8 = #ttg.padded_shared<[32:+8] {offset = [[1], [2], [4], [8], [16], [32], [64], [128], [256], [512]], block = [[0]]}>
+#inactive_padding = #ttg.padded_shared<[256:+1] {offset = [[1], [2], [4], [8], [16], [32], [64], [128]], block = [[0]]}>
+#prefix_padding = #ttg.padded_shared<[64:+1] {offset = [[1], [2], [4], [8], [16], [32], [64]], block = [[0]]}>
+#row4 = #ttg.blocked<{sizePerThread = [1, 4], threadsPerWarp = [2, 16], warpsPerCTA = [1, 4], order = [1, 0], CGALayout = [[0, 0]]}>
+#row_padding = #ttg.padded_shared<[64:+1, 128:+2] {offset = [[0, 1], [0, 2], [0, 4], [0, 8], [0, 16], [0, 32], [0, 64], [1, 0]], block = [[0, 0]]}>
 #shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[0]]}>
 #barrier = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
 #smem = #ttg.shared_memory
@@ -1275,11 +1286,78 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, "ttg.thr
   }
 
   // CHECK-LABEL: @async_shared_store_vector
-  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // CHECK: llvm.bitcast {{.*}} : vector<2xi32> to i64
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i64, !llvm.ptr<7>) -> ()
   // ASYNC-STORE-PTX-LABEL: async_shared_store_vector(
-  // ASYNC-STORE-PTX: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // ASYNC-STORE-PTX: st.async.shared::cluster.mbarrier::complete_tx::bytes.b64
   tt.func public @async_shared_store_vector(%src: tensor<256xi32, #vector>, %dst: !ttg.memdesc<256xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
     ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xi32, #vector> -> !ttg.memdesc<256xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_128
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  // RUBIN-LABEL: @async_shared_store_vector_128
+  // RUBIN: llvm.bitcast {{.*}} : vector<4xi32> to i128
+  // RUBIN: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i128, !llvm.ptr<7>) -> ()
+  // RUBIN: llvm.bitcast {{.*}} : vector<2xi64> to i128
+  // RUBIN: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i128, !llvm.ptr<7>) -> ()
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_128(
+  // ASYNC-STORE-PTX83: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v4.b32
+  // ASYNC-STORE-PTX83: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b64
+  // ASYNC-STORE-PTX92-COUNT-2: st.async.shared::cluster.mbarrier::complete_tx::bytes.b128
+  tt.func public @async_shared_store_vector_128(%src32: tensor<512xi32, #vector4>, %src64: tensor<256xf64, #vector>, %dst32: !ttg.memdesc<512xi32, #shared, #smem, mutable>, %dst64: !ttg.memdesc<256xf64, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src32, %dst32, %mbarrier : tensor<512xi32, #vector4> -> !ttg.memdesc<512xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src64, %dst64, %mbarrier : tensor<256xf64, #vector> -> !ttg.memdesc<256xf64, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_vector_predicated
+  // CHECK-NOT: llvm.call_intrinsic "llvm.nvvm.st.async"
+  // CHECK: "@$4 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // RUBIN-LABEL: @async_shared_store_vector_predicated
+  // RUBIN-NOT: llvm.call_intrinsic "llvm.nvvm.st.async"
+  // RUBIN: "@$4 st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  // ASYNC-STORE-PTX-LABEL: async_shared_store_vector_predicated(
+  // ASYNC-STORE-PTX: @%p{{[0-9]+}} st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.v2.b32
+  tt.func public @async_shared_store_vector_predicated(%src: tensor<128xi32, #vector>, %dst: !ttg.memdesc<128xi32, #shared, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<128xi32, #vector> -> !ttg.memdesc<128xi32, #shared, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // RUBIN-LABEL: @async_shared_store_padded
+  // RUBIN-COUNT-8: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
+  // RUBIN-COUNT-2: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i128, !llvm.ptr<7>) -> ()
+  // RUBIN-NOT: llvm.nvvm.st.async
+  // RUBIN: llvm.return
+  tt.func public @async_shared_store_padded(%src: tensor<1024xi32, #vector8>, %dst1: !ttg.memdesc<1024xi32, #padded1, #smem, mutable>, %dst8: !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst1, %mbarrier : tensor<1024xi32, #vector8> -> !ttg.memdesc<1024xi32, #padded1, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    ttng.async_shared_store %src, %dst8, %mbarrier : tensor<1024xi32, #vector8> -> !ttg.memdesc<1024xi32, #padded8, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_inactive_padding
+  // CHECK: llvm.call_intrinsic "llvm.nvvm.st.async"({{.*}}) : (!llvm.ptr<7>, i32, !llvm.ptr<7>) -> ()
+  tt.func public @async_shared_store_inactive_padding(%src: tensor<256xf16, #vector>, %dst: !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    ttng.async_shared_store %src, %dst, %mbarrier : tensor<256xf16, #vector> -> !ttg.memdesc<256xf16, #inactive_padding, #smem, mutable>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // CHECK-LABEL: @async_shared_store_padded_prefix
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  tt.func public @async_shared_store_padded_prefix(%src: tensor<32xf16, #vector>, %dst: !ttg.memdesc<128xf16, #prefix_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    %prefix = ttg.memdesc_subslice %dst[0] : !ttg.memdesc<128xf16, #prefix_padding, #smem, mutable> -> !ttg.memdesc<32xf16, #prefix_padding, #smem, mutable, 128>
+    ttng.async_shared_store %src, %prefix, %mbarrier : tensor<32xf16, #vector> -> !ttg.memdesc<32xf16, #prefix_padding, #smem, mutable, 128>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
+    tt.return
+  }
+
+  // The rows start at byte offsets 0 and 128 + 2*1 + 2 = 132.
+  // CHECK-LABEL: @async_shared_store_combined_padding
+  // CHECK: st.async.weak.shared::cluster.mbarrier::complete_tx::bytes.b32
+  tt.func public @async_shared_store_combined_padding(%src: tensor<2x4xi8, #row4>, %dst: !ttg.memdesc<2x128xi8, #row_padding, #smem, mutable>, %mbarrier: !ttg.memdesc<2xi64, #barrier, #smem, mutable>) {
+    %rows = ttg.memdesc_subslice %dst[0, 0] : !ttg.memdesc<2x128xi8, #row_padding, #smem, mutable> -> !ttg.memdesc<2x4xi8, #row_padding, #smem, mutable, 2x128>
+    ttng.async_shared_store %src, %rows, %mbarrier : tensor<2x4xi8, #row4> -> !ttg.memdesc<2x4xi8, #row_padding, #smem, mutable, 2x128>, !ttg.memdesc<2xi64, #barrier, #smem, mutable>
     tt.return
   }
 }

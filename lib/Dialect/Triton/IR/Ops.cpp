@@ -211,11 +211,7 @@ struct CanonicalizeMaskedStorePattern : public OpRewritePattern<StoreOp> {
 };
 
 OpFoldResult AtomicRMWOp::fold(FoldAdaptor adaptor) {
-  if (auto mask = adaptor.getMask(); mask && matchPattern(mask, m_One())) {
-    getMaskMutable().clear();
-    return getResult();
-  }
-  return {};
+  return foldRedundantMask(*this, adaptor.getMask());
 }
 
 Value AtomicRMWOp::getPredicateOperand() { return getMask(); }

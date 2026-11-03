@@ -260,19 +260,20 @@ struct FpToFpOpConversion
     return LLVM::FPExtOp::create(rewriter, loc, f32_ty, v);
   }
 
+  bool hasNativeFp8() const {
+    return computeCapability >= 90 ||
+           (computeCapability == 89 && ptxVersion >= 81);
+  }
+
   std::pair<ConverterT, size_t>
   getConversionFunc(Type srcTy, Type dstTy,
                     std::optional<RoundingMode> roundingMode) const {
-    // Blackwell and newer can convert packed BF16/FP8 values directly.
-    // Require PTX 9.2 to support both directions.
-    bool hasPackedBf16 = computeCapability >= 100 && ptxVersion >= 92;
-
-    if (computeCapability < 89 &&
-        (isa<Float8E4M3FNType>(srcTy) || isa<Float8E4M3FNType>(dstTy))) {
-      llvm::report_fatal_error("Conversion from/to f8e4m3nv is only supported "
-                               "on compute capability >= 89\n");
-    }
-    if (computeCapability >= 89) {
+    // SM100f, SM110f and SM120f support packed BF16 narrowing in PTX 9.1
+    // and widening to BF16 in PTX 9.2.
+    int family = computeCapability / 10;
+    bool hasPackedBf16 = (family == 10 || family == 11 || family == 12) &&
+                         ptxVersion >= (srcTy.isBF16() ? 91 : 92);
+    if (hasNativeFp8()) {
       if (isa<Float8E4M3FNType, Float8E5M2Type>(dstTy) &&
           (srcTy.isF16() || srcTy.isBF16() || srcTy.isF32()) &&
           roundingMode == RoundingMode::RTNE) {
@@ -295,8 +296,8 @@ struct FpToFpOpConversion
     if (isa<Float8E5M2Type>(dstTy) && (srcTy.isF16() || srcTy.isF32()) &&
         roundingMode == RoundingMode::RTNE)
       return {makeSoftwareE5M2Converter(srcTy.isF32()), 4};
-    if (computeCapability < 89 && isa<Float8E5M2Type>(srcTy) &&
-        dstTy.isBF16() && !roundingMode) {
+    if (!hasNativeFp8() && isa<Float8E5M2Type>(srcTy) && dstTy.isBF16() &&
+        !roundingMode) {
       return {[](Location loc, ConversionPatternRewriter &rewriter,
                  const SmallVector<Value> &values) {
                 auto halves = makeE5M2F16Converter(true)(loc, rewriter, values);
@@ -349,6 +350,12 @@ struct FpToFpOpConversion
     auto dstElementType = getElementTypeOrSelf(op.getResult());
     auto roundingMode = op.getRounding();
 
+    if (!hasNativeFp8() && (isa<Float8E4M3FNType>(srcElementType) ||
+                            isa<Float8E4M3FNType>(dstElementType))) {
+      op.emitOpError("E4M3FN conversion requires SM90 or newer, or SM89 with "
+                     "PTX 8.1 or newer");
+      return {};
+    }
     if (llvm::isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType)) {
       assert(roundingMode.has_value() &&
              "Rounding mode must be specified for convertsions to fp8");
@@ -381,14 +388,12 @@ struct FpToFpOpConversion
                              roundingMode.value_or(RoundingMode::RTNE))};
     }
 
-    bool useSoftwareFp8 = computeCapability < 89 &&
+    bool useSoftwareFp8 = !hasNativeFp8() &&
                           isa<Float8E5M2Type>(dstElementType) &&
                           roundingMode == RoundingMode::RTNE;
     bool useFP16IntermediateSrc =
         (srcElementType.isF32() &&
-         (!(llvm::isa<Float8E5M2Type>(dstElementType) ||
-            (computeCapability >= 89 &&
-             llvm::isa<Float8E4M3FNType>(dstElementType))) ||
+         (!isa<Float8E5M2Type, Float8E4M3FNType>(dstElementType) ||
           roundingMode.value() == RoundingMode::RTZ)) ||
         (useSoftwareFp8 && srcElementType.isBF16());
     bool isDstFP32 = dstElementType.isF32();

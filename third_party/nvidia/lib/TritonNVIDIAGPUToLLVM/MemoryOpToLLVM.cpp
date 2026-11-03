@@ -256,6 +256,8 @@ struct AsyncSharedStoreOpConversion
     if (!triton::nvidia_gpu::AsyncSharedStoreOp::isSupported(
             targetInfo.getComputeCapability()))
       return op.emitError("requires cluster-capable SM90+");
+    if (targetInfo.getPtxVersion() < 81)
+      return op.emitError("requires PTX 8.1 or newer");
 
     auto loc = op.getLoc();
     auto *ctx = op.getContext();
@@ -299,9 +301,7 @@ struct AsyncSharedStoreOpConversion
       unsigned storeBitwidth = std::max(32u, elemBitwidth);
       unsigned elemsPerStore = storeBitwidth / elemBitwidth;
       unsigned storeVec = vecTy.getNumElements() / elemsPerStore;
-      std::string constraint = storeBitwidth == 64 ? "l" : "r";
-
-      SmallVector<std::pair<Value, std::string>> storeValues;
+      SmallVector<Value> storeValues;
       for (unsigned i = 0; i < storeVec; ++i) {
         auto elems = values.slice(idx + i * elemsPerStore, elemsPerStore);
         Value value = elems.front();
@@ -312,17 +312,25 @@ struct AsyncSharedStoreOpConversion
           value = b.ptrtoint(int_ty(storeBitwidth), value);
         else if (!elemTy.isInteger())
           value = b.bitcast(value, int_ty(storeBitwidth));
-        storeValues.emplace_back(value, constraint);
+        storeValues.push_back(value);
       }
 
-      if (storeVec == 1 && !threadPred) {
-        LLVM::createLLVMIntrinsicCallOp(
-            rewriter, storeLoc, "llvm.nvvm.st.async", TypeRange{},
-            {dst, storeValues.front().first, mbarrier});
+      unsigned totalBitwidth = storeBitwidth * storeVec;
+      // The intrinsic takes a scalar payload. The i128 form requires PTX 9.2.
+      if (!threadPred &&
+          (totalBitwidth <= 64 ||
+           (totalBitwidth == 128 && targetInfo.getPtxVersion() >= 92))) {
+        Value storeValue = storeValues.front();
+        if (storeVec > 1)
+          storeValue = b.bitcast(packLLVector(storeLoc, storeValues, rewriter),
+                                 int_ty(totalBitwidth));
+        LLVM::createLLVMIntrinsicCallOp(rewriter, storeLoc,
+                                        "llvm.nvvm.st.async", TypeRange{},
+                                        {dst, storeValue, mbarrier});
         return {};
       }
 
-      // The intrinsic does not support predicated or vector stores.
+      // Keep instruction predicates and widths unsupported by the intrinsic.
       PTXBuilder ptxBuilder;
       auto &store = ptxBuilder.create("st.async")
                         ->o("weak")
@@ -331,10 +339,15 @@ struct AsyncSharedStoreOpConversion
                         .v(storeVec, /*predicate=*/storeVec > 1)
                         .b(storeBitwidth);
       auto *dstOperand = ptxBuilder.newAddrOperand(dst, "r");
-      auto *valueOperand =
-          storeVec == 1
-              ? ptxBuilder.newOperand(storeValues.front().first, constraint)
-              : ptxBuilder.newListOperand(storeValues);
+      std::string constraint = storeBitwidth == 64 ? "l" : "r";
+      PTXBuilder::Operand *valueOperand;
+      if (storeVec == 1) {
+        valueOperand = ptxBuilder.newOperand(storeValues.front(), constraint);
+      } else {
+        valueOperand = ptxBuilder.newListOperand();
+        for (Value word : storeValues)
+          valueOperand->listAppend(ptxBuilder.newOperand(word, constraint));
+      }
       auto *barrierOperand = ptxBuilder.newAddrOperand(mbarrier, "r");
       store(dstOperand, valueOperand, barrierOperand)
           .maybePredicate(threadPred, "b");
@@ -342,7 +355,8 @@ struct AsyncSharedStoreOpConversion
       return {};
     };
     lowerLocalLdSt(loc, ctx, cvt, values, llvmElemTy, dstTy, dstMemObj,
-                   rewriter, targetInfo, emitStore);
+                   rewriter, targetInfo, emitStore,
+                   op.getMaxStoreElements(cvt));
     rewriter.eraseOp(op);
     return success();
   }
@@ -364,6 +378,14 @@ public:
   LogicalResult
   matchAndRewrite(triton::gpu::LocalAtomicScatterRMWOp op, OpAdaptor adaptor,
                   ConversionPatternRewriter &rewriter) const override {
+    Type elemTy = op.getDst().getType().getElementType();
+    RMWOp rmwOp = op.getAtomicRmwOp();
+    if (elemTy.getIntOrFloatBitWidth() < 32 &&
+        !usePtxForHalfAdd(rmwOp, elemTy, targetInfo))
+      return op.emitOpError() << "no width-preserving NVIDIA shared atomic "
+                              << stringifyRMWOp(rmwOp) << " for " << elemTy
+                              << " on SM" << targetInfo.getComputeCapability();
+
     auto loc = op.getLoc();
     auto lowering = prepareLocalAtomicScatterRMW(
         op, adaptor.getDst(), adaptor.getIndices(), adaptor.getValues(),
@@ -373,9 +395,7 @@ public:
       return failure();
     LocalAtomicScatterRMWInfo &info = *lowering;
 
-    RMWOp rmwOp = op.getAtomicRmwOp();
-    bool isI32Inc = rmwOp == RMWOp::ADD &&
-                    info.valuesTy.getElementType().isInteger(32) &&
+    bool isI32Inc = rmwOp == RMWOp::ADD && elemTy.isInteger(32) &&
                     isConstI32OneTensor(op.getValues());
     bool returnOld = !op.getResult().use_empty();
 

@@ -13,6 +13,28 @@ tt.func @false_async_copy_keeps_fill(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %
   %token = ttg.async_copy_global_to_local %ptr, %mem mask %false other %zero : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
   tt.return %token : !ttg.async.token
 }
+
+// CHECK-LABEL: @true_async_copy_mask
+// CHECK-SAME: (%[[PTR:[^:]+]]: {{.*}}, %[[MEM:[^:]+]]:
+// CHECK: %[[TOKEN:.*]] = ttg.async_copy_global_to_local %[[PTR]], %[[MEM]] {contiguity = 4 : i32} :
+// CHECK-NEXT: tt.return %[[TOKEN]] : !ttg.async.token
+tt.func @true_async_copy_mask(%ptr: tensor<128x!tt.ptr<f32>, #blocked>, %mem: !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>) -> !ttg.async.token {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %zero = arith.constant dense<0.0> : tensor<128xf32, #blocked>
+  %token = ttg.async_copy_global_to_local %ptr, %mem mask %true other %zero {contiguity = 4 : i32} : tensor<128x!tt.ptr<f32>, #blocked> -> !ttg.memdesc<128xf32, #shared, #ttg.shared_memory, mutable>
+  tt.return %token : !ttg.async.token
+}
+
+// CHECK-LABEL: @fold_shared_atomic_mask
+// CHECK-NOT: arith.constant
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}} {axis = 0 : i32}
+// CHECK: ttg.local_atomic_scatter_rmw add, {{.*}}], %{{[^, ]+}}, %{{[^, ]+}} {axis = 0 : i32}
+tt.func @fold_shared_atomic_mask(%dst: !ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, %idx: tensor<128xi32, #blocked>, %val: tensor<128xi32, #blocked>, %mask: tensor<128xi1, #blocked>) {
+  %true = arith.constant dense<true> : tensor<128xi1, #blocked>
+  %0 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %true {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  %1 = ttg.local_atomic_scatter_rmw add, %dst[%idx], %val, %mask {axis = 0 : i32} : (!ttg.memdesc<128xi32, #shared, #ttg.shared_memory, mutable>, tensor<128xi32, #blocked>, tensor<128xi32, #blocked>, tensor<128xi1, #blocked>) -> tensor<128xi32, #blocked>
+  tt.return
+}
 }
 
 // -----

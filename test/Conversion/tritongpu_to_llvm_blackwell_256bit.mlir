@@ -1,11 +1,15 @@
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,FP4,LEGACY,FP16-NATIVE,ATOMIC %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,LEGACY,FP16-NATIVE %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=92' -cse | FileCheck --check-prefixes=PRE_BW,FP8,FP4,LEGACY,FP16-LEGACY %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,FP4,LEGACY,FP16-NATIVE %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,FP4,PACKED,FP16-NATIVE %s
-// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=92' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,PACKED,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=86' -cse | FileCheck --check-prefixes=FP8,FP4,FROM-F32,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=88' -cse | FileCheck --check-prefixes=BW256,FP8,FP4,FROM-F32,LEGACY,FP16-NATIVE,ATOMIC %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=88' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,FROM-F32,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=92' -cse | FileCheck --check-prefixes=PRE_BW,FP8,FP4,FROM-F32,LEGACY,FP16-LEGACY %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=91' -cse | FileCheck --check-prefixes=FP8,FP4,FROM-BF16,LEGACY,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=100 ptx-version=92' -cse | FileCheck --check-prefixes=FP8,FP4,FROM-BF16,PACKED,FP16-NATIVE %s
+// RUN: triton-opt %s -split-input-file --convert-triton-gpu-to-llvm='compute-capability=103 ptx-version=92' -cse | FileCheck --check-prefixes=SM103,FP8,FP4,FROM-BF16,PACKED,FP16-NATIVE %s
 // RUN: split-file %s %t
+// RUN: triton-opt %t/fp8e5.mlir --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=80' -cse | FileCheck %t/fp8e5.mlir --check-prefix=SOFTWARE
+// RUN: triton-opt %t/fp8e5.mlir --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -cse | FileCheck %t/fp8e5.mlir --check-prefixes=FP8,FROM-F32,LEGACY
+// RUN: not triton-opt %t/fp8e4.mlir --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=80' 2>&1 | FileCheck %s --check-prefix=NO-E4M3
+// RUN: triton-opt %t/fp8e4.mlir --convert-triton-gpu-to-llvm='compute-capability=89 ptx-version=81' -cse | FileCheck %t/fp8e4.mlir --check-prefixes=FP8,FROM-F32,LEGACY
 // RUN: triton-opt %t/fp4-ptx.mlir --convert-triton-gpu-to-llvm='compute-capability=90 ptx-version=83' --convert-nv-gpu-to-llvm | mlir-translate --mlir-to-llvmir | opt -O3 -S | llc -mtriple=nvptx64-nvidia-cuda -mcpu=sm_90 -mattr=+ptx83 | FileCheck %s --check-prefix=FP4-PTX
 
 //--- lowerings.mlir
@@ -99,24 +103,16 @@ module attributes {"ttg.target" = "cuda:103", "ttg.num-ctas" = 1 : i32, "ttg.num
 
 // -----
 
-// Blackwell uses native packed BF16/FP8 conversions in both directions with PTX 9.2.
-// Pre-Blackwell targets and older PTX versions retain their existing paths.
+//--- fp8e4.mlir
+// NO-E4M3: E4M3FN conversion requires SM90 or newer, or SM89 with PTX 8.1 or newer
 #blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
   // FP8-LABEL: @bf16_to_fp8e4
-  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E4M3FN)
-  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E4M3FN)
+  // FROM-BF16: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E4M3FN)
+  // FROM-F32: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E4M3FN)
   tt.func private @bf16_to_fp8e4(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E4M3FN, #blocked_fp8> {
     %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E4M3FN, #blocked_fp8>
     tt.return %out : tensor<64xf8E4M3FN, #blocked_fp8>
-  }
-
-  // FP8-LABEL: @bf16_to_fp8e5
-  // PACKED: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E5M2)
-  // LEGACY: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E5M2)
-  tt.func private @bf16_to_fp8e5(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E5M2, #blocked_fp8> {
-    %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E5M2, #blocked_fp8>
-    tt.return %out : tensor<64xf8E5M2, #blocked_fp8>
   }
 
   // FP8-LABEL: @fp8e4_to_bf16
@@ -127,11 +123,30 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
     %out = tt.fp_to_fp %in : tensor<64xf8E4M3FN, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
   }
+}
+
+// -----
+//--- fp8e5.mlir
+#blocked_fp8 = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
+module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
+  // FP8-LABEL: @bf16_to_fp8e5
+  // FROM-BF16: nvvm.convert.bf16x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xbf16> -> vector<2xi8>(f8E5M2)
+  // FROM-F32: nvvm.convert.f32x2.to.f8x2 {{.*}} rnd = <rn> sat = <satfinite> : vector<2xi8>(f8E5M2)
+  // SOFTWARE-LABEL: @bf16_to_fp8e5
+  // SOFTWARE: llvm.call_intrinsic "llvm.fptrunc.round"
+  // SOFTWARE: llvm.call_intrinsic "llvm.minimumnum"
+  tt.func private @bf16_to_fp8e5(%in: tensor<64xbf16, #blocked_fp8>) -> tensor<64xf8E5M2, #blocked_fp8> {
+    %out = tt.fp_to_fp %in, rounding = rtne : tensor<64xbf16, #blocked_fp8> -> tensor<64xf8E5M2, #blocked_fp8>
+    tt.return %out : tensor<64xf8E5M2, #blocked_fp8>
+  }
 
   // FP8-LABEL: @fp8e5_to_bf16
   // PACKED: nvvm.convert.f8x2.to.bf16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xbf16>
   // LEGACY: nvvm.convert.f8x2.to.f16x2 {{.*}} : vector<2xi8>(f8E5M2) -> vector<2xf16>
   // LEGACY-COUNT-2: llvm.call_intrinsic "llvm.fptrunc.round"
+  // SOFTWARE-LABEL: @fp8e5_to_bf16
+  // SOFTWARE: llvm.fpext {{.*}} : vector<4xf16> to vector<4xf32>
+  // SOFTWARE: llvm.shufflevector
   tt.func private @fp8e5_to_bf16(%in: tensor<64xf8E5M2, #blocked_fp8>) -> tensor<64xbf16, #blocked_fp8> {
     %out = tt.fp_to_fp %in : tensor<64xf8E5M2, #blocked_fp8> -> tensor<64xbf16, #blocked_fp8>
     tt.return %out : tensor<64xbf16, #blocked_fp8>
@@ -139,7 +154,7 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {
 }
 
 // -----
-
+//--- fp4-and-atomics.mlir
 #packed_fp4 = #ttg.blocked<{sizePerThread = [4], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 #unpacked_fp4 = #ttg.blocked<{sizePerThread = [8], threadsPerWarp = [32], warpsPerCTA = [1], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 1 : i32} {

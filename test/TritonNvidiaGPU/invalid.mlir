@@ -467,6 +467,19 @@ module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.targ
 
 // -----
 
+#blocked_pair = #ttg.blocked<{sizePerThread = [2], threadsPerWarp = [32], warpsPerCTA = [4], order = [0], CGALayout = [[0]]}>
+#padded = #ttg.padded_shared<[4:+1] {offset = [[1], [2], [4], [8], [16], [32], [64], [128]], block = [[0]]}>
+#barrier_shared = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [0], CGALayout = [[1]]}>
+module attributes {"ttg.num-ctas" = 2 : i32, "ttg.num-warps" = 4 : i32, ttg.target = "cuda:100", "ttg.threads-per-warp" = 32 : i32} {
+  tt.func public @async_shared_store_unaligned_padding(%src: tensor<256xf16, #blocked_pair>, %dst: !ttg.memdesc<256xf16, #padded, #ttg.shared_memory, mutable>, %bar: !ttg.memdesc<2xi64, #barrier_shared, #ttg.shared_memory, mutable>) {
+    // expected-error @+1 {{requires a layout vectorizing stores to at least 32 bits}}
+    ttng.async_shared_store %src, %dst, %bar : tensor<256xf16, #blocked_pair> -> !ttg.memdesc<256xf16, #padded, #ttg.shared_memory, mutable>, !ttg.memdesc<2xi64, #barrier_shared, #ttg.shared_memory, mutable>
+    tt.return
+  }
+}
+
+// -----
+
 #shared1 = #ttg.swizzled_shared<{vec = 1, perPhase = 1, maxPhase = 1, order = [1, 0]}>
 #scales = #ttg.linear<{register = [[0, 1], [0, 2], [32, 0], [64, 0]], lane = [[1, 0], [2, 0], [4, 0], [8, 0], [16, 0]], warp = [[0, 0], [0, 0]], block = []}>
 #tmem = #ttng.tensor_memory_scales_encoding<>

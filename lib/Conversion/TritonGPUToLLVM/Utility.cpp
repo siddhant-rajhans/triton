@@ -834,7 +834,7 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
           Value warpId, RewriterBase &rewriter,
           const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          LowerLdStCallback lowerInst) {
+          LowerLdStCallback lowerInst, std::optional<int> instMaxVecElems) {
   assert(!smemBases.empty() && "smemBases cannot be empty");
   auto vals = to_vector(valsArray);
   bool isStore = !vals.empty();
@@ -873,6 +873,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
 
   auto [elemsPerVec, permutation] =
       largestVectorisation(ctx, cvt, bitwidth, maybeMaxVecElems);
+  if (instMaxVecElems)
+    elemsPerVec = std::min(elemsPerVec, *instMaxVecElems);
 
   cvt = permutation.apply(cvt);
   if (isStore) {
@@ -1031,7 +1033,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
-               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst) {
+               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst,
+               std::optional<int> instMaxVecElems) {
 
   auto isStore = !valsArray.empty();
   // Remove broadcasting in the registers
@@ -1042,8 +1045,9 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
     if (isStore) {
       inVals = removeBroadcastSrc.apply(inVals);
     }
-    auto outVals = lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy,
-                                  smemObj, rewriter, targetInfo, lowerInst);
+    auto outVals =
+        lowerLocalLdSt(loc, ctx, prmtCvt, inVals, llvmElemTy, srcTy, smemObj,
+                       rewriter, targetInfo, lowerInst, instMaxVecElems);
     if (!isStore) {
       outVals = broadcastAs(outVals, cvt);
     }
@@ -1074,7 +1078,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
   return lowerLdSt(loc, ctx, cvt, valsArray, llvmElemTy, smemBases,
                    paddingShifts, affineOffset, maskSpanAffineOffset,
                    affineBlockOffset, maskSpanAffineBlock, laneId, warpId,
-                   rewriter, targetInfo, maybeMaxVecElems, lowerInst);
+                   rewriter, targetInfo, maybeMaxVecElems, lowerInst,
+                   instMaxVecElems);
 }
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,

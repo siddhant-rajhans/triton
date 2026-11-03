@@ -1073,6 +1073,10 @@ LogicalResult LocalScatterOp::verify() {
 }
 
 // LocalAtomicScatterRMWOp
+OpFoldResult LocalAtomicScatterRMWOp::fold(FoldAdaptor adaptor) {
+  return foldRedundantMask(*this, adaptor.getMask());
+}
+
 bool LocalAtomicScatterRMWOp::isCommutative() {
   if (!getResult().use_empty() ||
       !getDst().getType().getElementType().isInteger())
@@ -1152,6 +1156,13 @@ LogicalResult LocalAtomicScatterRMWOp::verify() {
 }
 
 // AsyncCopyGlobalToLocalOp
+OpFoldResult AsyncCopyGlobalToLocalOp::fold(FoldAdaptor adaptor) {
+  auto result = foldRedundantMask(*this, adaptor.getMask());
+  if (result)
+    getOtherMutable().clear();
+  return result;
+}
+
 LogicalResult AsyncCopyGlobalToLocalOp::verify() {
   if (!getResult().getType().getMutableMemory())
     return emitOpError("Cannot store into immutable memory");

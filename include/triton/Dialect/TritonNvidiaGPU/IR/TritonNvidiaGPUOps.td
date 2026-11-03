@@ -516,6 +516,7 @@ def TTNG_AsyncSharedStoreOp : TTNG_Op<"async_shared_store", [
       return ::mlir::triton::nvidia_gpu::TargetFeatures(computeCapability)
           .supportClusterOps();
     }
+    int getMaxStoreElements(const ::mlir::triton::LinearLayout &cvt);
   }];
 }
 

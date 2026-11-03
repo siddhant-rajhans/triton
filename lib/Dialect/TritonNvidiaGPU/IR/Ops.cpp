@@ -44,6 +44,7 @@
 #include "llvm/Support/ErrorHandling.h"
 #include "llvm/Support/MathExtras.h"
 #include "llvm/Support/raw_ostream.h"
+#include <numeric>
 
 using namespace mlir::triton::gpu;
 
@@ -537,6 +538,24 @@ Type ArriveBarrierOp::getPredicateOperandTypeLike() {
 }
 
 // -- AsyncSharedStoreOp --
+int AsyncSharedStoreOp::getMaxStoreElements(const LinearLayout &cvt) {
+  auto dstTy = getDst().getType();
+  auto enc = cast<gpu::SharedEncodingTrait>(dstTy.getEncoding());
+  int bitwidth = getIntOrFloatOrPtrBitWidth(dstTy.getElementType());
+  int maxElems = std::min(16, enc.getAlignment()) * 8 / bitwidth;
+  if (auto padded = gpu::getPaddedEncoding(enc)) {
+    auto offsets = getOutputBasisMask(cvt, llvm::to_vector(cvt.getInDimNames()),
+                                      StringAttr::get(getContext(), "offset"));
+    // Starting at an aligned address, each varying offset bit contributes
+    // the sum of all padding increments up to that offset.
+    for (; offsets && maxElems > 1; offsets &= offsets - 1) {
+      int64_t span = (int64_t{1} << llvm::countr_zero(offsets)) + 1;
+      maxElems = std::gcd(maxElems, padded.getPaddedSize({span}) - span);
+    }
+  }
+  return maxElems;
+}
+
 LogicalResult AsyncSharedStoreOp::verify() {
   // PTX defines weak shared::cluster st.async as UB for a one-CTA cluster.
   if (gpu::lookupNumCTAs(getOperation()) < 2)
@@ -549,6 +568,8 @@ LogicalResult AsyncSharedStoreOp::verify() {
 
   auto srcTy = getSrc().getType();
   auto dstTy = getDst().getType();
+  if (!isa<gpu::SharedEncodingTrait>(dstTy.getEncoding()))
+    return emitOpError("requires a shared-memory destination");
   unsigned bitwidth = getIntOrFloatOrPtrBitWidth(srcTy.getElementType());
 
   auto regLayout = toLinearLayout(srcTy);
@@ -560,7 +581,8 @@ LogicalResult AsyncSharedStoreOp::verify() {
     maybeMaxVecElems = getMinInterval(dstTy.getEncoding());
   auto vectorization =
       largestVectorisation(getContext(), cvt, bitwidth, maybeMaxVecElems);
-  unsigned elemsPerVec = vectorization.first;
+  unsigned elemsPerVec =
+      std::min(vectorization.first, getMaxStoreElements(cvt));
   if (elemsPerVec * bitwidth < 32)
     return emitOpError("requires a layout vectorizing stores to at least 32 "
                        "bits");

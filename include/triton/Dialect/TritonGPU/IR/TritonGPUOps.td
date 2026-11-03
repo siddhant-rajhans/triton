@@ -194,6 +194,7 @@ def TTG_AsyncCopyGlobalToLocalOp : TTG_Op<"async_copy_global_to_local", [
   let summary = "Copy data from global memory to local memory asynchronously";
 
   let hasVerifier = 1;
+  let hasFolder = 1;
   let description = [{
     This operation copies data from global memory to local memory asynchronously.
     This is analogue to `tt.load` except the data are copied to local memory pointed
@@ -590,6 +591,7 @@ def TTG_LocalAtomicScatterRMWOp : TTG_Op<"local_atomic_scatter_rmw", [
     $atomic_rmw_op `,` $dst `[` $indices `]` `,` $values (`,` $mask^)? attr-dict `:`
     functional-type(operands, results)
   }];
+  let hasFolder = 1;
   let hasVerifier = 1;
 }
 

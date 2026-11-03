@@ -969,11 +969,11 @@ public:
 
         // Codegen the atomic-rmw instruction(s)
         rewriter.setInsertionPointToEnd(atomicBlock);
-        Value atom =
-            LLVM::AtomicRMWOp::create(rewriter, loc, *llvmAtomicBinOp, rmwPtr,
-                                      valElements[i], *llvmAtomicMemOrdering,
-                                      StringRef("device"))
-                .getResult();
+        Value atom = LLVM::AtomicRMWOp::create(
+                         rewriter, loc, *llvmAtomicBinOp, rmwPtr,
+                         valElements[i], *llvmAtomicMemOrdering,
+                         targetInfo.getAtomicSyncScope(op.getScope()))
+                         .getResult();
         LLVM::BrOp::create(rewriter, loc, atom, endBlock);
         rewriter.setInsertionPointToStart(endBlock);
         resultVals[i] = endBlock->getArgument(0);
@@ -1134,9 +1134,10 @@ struct AsyncCopyGlobalToLocalOpConversion
                                   : IntegerAttr();
     int64_t l2PrefetchSize =
         l2PrefetchSizeAttr ? l2PrefetchSizeAttr.getInt() : 0;
-    bool useIntrinsic = !llMask && !l2PolicyReg && !l2PrefetchSize &&
-                        !freeVarMasks.lookup(str_attr("lane")) &&
-                        !freeVarMasks.lookup(str_attr("warp"));
+    // Keep the mask as PTX's ignore-source predicate. NVVM only accepts an
+    // integer source byte count.
+    bool useIntrinsic =
+        !llMask && !l2PolicyReg && !l2PrefetchSize && !threadPred;
 
     auto emitCpAsync = [&b, threadPred, ptrTy, l2PolicyReg, l2PrefetchSize,
                         useIntrinsic, cacheModifier = cachePolicy->modifier,

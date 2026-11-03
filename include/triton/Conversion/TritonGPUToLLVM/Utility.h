@@ -725,7 +725,8 @@ LowerLdStCallback makeSharedLoadEmitter(const TargetInfoBase &targetInfo,
 // ldmatrix.trans makes that path more specialized. An empty valsArray emits
 // loads and returns their values; otherwise it emits stores. `paddingShifts`
 // describes shared-memory padding, and `cvt` maps (register, lane, warp, block)
-// to (offset[, partition]).
+// to (offset[, partition]). `instMaxVecElems` caps instruction width after
+// register permutation.
 SmallVector<Value>
 lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           ArrayRef<Value> valsArray, // Input for store, output for load
@@ -735,7 +736,8 @@ lowerLdSt(Location loc, MLIRContext *ctx, LinearLayout cvt,
           Value affineBlockOffset, uint64_t maskSpanAffineBlock, Value laneId,
           Value warpId, RewriterBase &rewriter,
           const TargetInfoBase &targetInfo, std::optional<int> maybeMaxVecElems,
-          LowerLdStCallback lowerInst);
+          LowerLdStCallback lowerInst,
+          std::optional<int> instMaxVecElems = std::nullopt);
 
 // Lower local_load/local_store via ld.shared/st.shared
 SmallVector<Value>
@@ -744,7 +746,8 @@ lowerLocalLdSt(Location loc, MLIRContext *ctx,
                ArrayRef<Value> valsArray, // Input for store, empty for load
                Type llvmElemTy, triton::gpu::MemDescType srcTy,
                SharedMemoryObject smemObj, RewriterBase &rewriter,
-               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst);
+               const TargetInfoBase &targetInfo, LowerLdStCallback lowerInst,
+               std::optional<int> instMaxVecElems = std::nullopt);
 
 SmallVector<Value> unpackLLElements(Location loc, Value llvmStruct,
                                     RewriterBase &rewriter);
