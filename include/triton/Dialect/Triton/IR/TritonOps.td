@@ -492,6 +492,7 @@ def TT_AtomicRMWOp : TT_Op<"atomic_rmw", [
       functional-type(operands, $result)
     }];
 
+    let hasFolder = 1;
 }
 
 def TT_AtomicCASOp : TT_Op<"atomic_cas", [

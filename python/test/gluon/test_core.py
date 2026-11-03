@@ -337,6 +337,38 @@ def test_atomic_load_store_vectorization(op, dtype, stride, offset, mask_group, 
     assert f"{opcode}.relaxed.gpu.global{suffix}.b{word_bits}" in compiled.asm["ptx"]
 
 
+@pytest.mark.skipif(not is_cuda(), reason="Checks NVIDIA atomic lowering")
+@pytest.mark.parametrize("mode", ["omitted", "true", "partial", "scalar"])
+def test_atomic_rmw_mask(mode, device):
+
+    @gluon.jit
+    def kernel(X, Old, MODE: ttgl.constexpr):
+        if MODE == "scalar":
+            ttgl.store(Old, ttgl.atomic_add(X, 1, sem="relaxed"))
+        else:
+            layout: ttgl.constexpr = ttgl.BlockedLayout([1], [32], [1], [0])
+            i = ttgl.arange(0, 32, layout=layout)
+            if MODE == "true":
+                mask = ttgl.full((32, ), True, ttgl.int1, layout=layout)
+            elif MODE == "partial":
+                mask = i < 16
+            else:
+                mask = None
+            old = ttgl.atomic_add(X + i, 1, mask=mask, sem="relaxed")
+            ttgl.store(Old + i, old, mask=mask)
+
+    x = torch.zeros(1 if mode == "scalar" else 32, dtype=torch.int32, device=device)
+    old = torch.full_like(x, -1)
+    compiled = kernel[(1, )](x, old, mode, num_warps=1)
+    expected = torch.ones_like(x)
+    if mode == "partial":
+        expected[16:] = 0
+    assert torch.equal(x, expected)
+    assert torch.equal(old, expected - 1)
+    if mode in ("omitted", "true"):
+        assert "atomicrmw add" in compiled.asm["llir"]
+
+
 @pytest.mark.parametrize("block_size", [1, 16, 128, 512])
 @pytest.mark.parametrize("num_warps", [4, 8])
 @pytest.mark.parametrize("timeout", [None, 0])

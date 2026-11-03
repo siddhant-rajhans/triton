@@ -2,6 +2,7 @@
 
 // CHECK: llvm.atomicrmw fadd
 
+#unique = #ttg.blocked<{sizePerThread = [1], threadsPerWarp = [32], warpsPerCTA = [4], order = [0]}>
 module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32,
                    ttg.target = "cuda:80",
                    "ttg.threads-per-warp" = 32 : i32} {
@@ -17,6 +18,13 @@ module attributes {"ttg.num-ctas" = 1 : i32, "ttg.num-warps" = 4 : i32,
     %3 = tt.atomic_rmw fadd, acq_rel, gpu, %2, %1, %true {allocation.offset = 0 : i32} : (!tt.ptr<bf16>, bf16, i1) -> bf16
     tt.store %arg3, %3 : !tt.ptr<bf16>
     tt.return
+  }
+  // CHECK-LABEL: @unmasked_bf16_add
+  // CHECK-NOT: llvm.cond_br
+  // CHECK: llvm.atomicrmw fadd
+  tt.func private @unmasked_bf16_add(%ptr: tensor<128x!tt.ptr<bf16>, #unique>, %val: tensor<128xbf16, #unique>) -> tensor<128xbf16, #unique> {
+    %old = tt.atomic_rmw fadd, acq_rel, gpu, %ptr, %val : (tensor<128x!tt.ptr<bf16>, #unique>, tensor<128xbf16, #unique>) -> tensor<128xbf16, #unique>
+    tt.return %old : tensor<128xbf16, #unique>
   }
 }
 

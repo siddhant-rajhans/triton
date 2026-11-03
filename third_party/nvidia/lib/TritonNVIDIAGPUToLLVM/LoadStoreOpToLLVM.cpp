@@ -942,8 +942,9 @@ public:
         return success();
       }
 
-      // Let LLVM handle compare+swap loop; branch-based pred should be fine
-      if (valueElemTy.isBF16() && getNVIDIAComputeCapability(moduleOp) < 90) {
+      // Guard LLVM's BF16 compare-and-swap loop on targets without native add.
+      if (pred && valueElemTy.isBF16() &&
+          getNVIDIAComputeCapability(moduleOp) < 90) {
         assert(vec == 1 && packed == 1);
         // Lower atomic bin-op and sem to LLVM
         auto llvmAtomicBinOp = matchAtomicOp(atomicRmwAttr);
